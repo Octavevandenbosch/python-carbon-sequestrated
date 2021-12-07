@@ -1,0 +1,239 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn import linear_model
+from sklearn.metrics import r2_score
+
+## carbon content of a tree
+carbon_percentage = 0.45
+# area of a m^2 to ha
+m2toha = 0.0001
+
+## 1. FUNCTIONS
+## 1.1 CSV extractor function
+def tree_csv_extractor(file_path, wood_density):
+    
+    # import data
+    df = pd.read_csv(file_path)
+    
+    # set columns to lower case
+    df.columns = df.columns.str.lower()
+
+    # rename columns
+    df.rename(columns = {'circonférence à 1.30 m (cm)':"circm",
+                         'circonférence à 1.30 m (m)':"cirm",
+                         'volume (m3)':"vol"},inplace=True)
+    
+    # finding the biomass of the tree using its density factor
+    df["bm"] = df["vol"]*wood_density
+    
+    # finding the diameter of the beerch with its circumference
+    df["dia"]= df["circm"]/np.pi
+    df = df.sort_values(by=['dia'])
+
+    # logarithmic transformation
+    df["logbm"]=np.log(df["bm"])
+    df["logdia"]=np.log(df["dia"])
+    
+    return df
+
+## 1.2 linear regression to calculate A & B
+def linear_regression(df, variable_1, variable_2, b_lit,a_lit, b_opt, a_opt):
+    
+    # calling the linear regression function
+    reg = linear_model.LinearRegression()
+    reg.fit(df[variable_1].values.reshape(-1,1), df[variable_2])
+    
+    # generating the log prediction
+    df["log_pred"] = reg.intercept_ + df["logdia"]*reg.coef_
+    
+    # generating the linear prediction
+    df["pred"] = np.exp(reg.intercept_) * df["dia"]**reg.coef_
+    df["pred_lit"] = np.exp(b_lit) * df["dia"]**a_lit
+    df["pred_opt"] = np.exp(b_opt) * df["dia"]**a_opt
+    
+    # calculating R^2
+    r_squared = r2_score(df["bm"], df["pred"])
+    r_squared_lit = r2_score(df["bm"], df["pred_lit"])
+    r_squared_opt = r2_score(df["bm"], df["pred_opt"])
+
+   # print("y intercept (b) =", np.exp(reg.intercept_), "coef (a) =", reg.coef_)
+   # print("R^2 is:", r_squared)
+   # print("R^2 of lit is:", r_squared_lit)
+   # print("R^2 opt is:", r_squared_opt)
+
+    return df, reg.intercept_, reg.coef_[0]
+
+## 1.3 calculate the total biomass
+def Total_biomass(plot_area,avg_diameter,trees_per_plot,intercept_,coef_):
+    
+    AGB = trees_per_plot*(np.exp(intercept_) * avg_diameter**coef_)
+
+    # finding the BGB - Source (p.15): https://link.springer.com/content/pdf/10.1007%2F978-1-4020-6547-7_17.pdf
+    BGB = trees_per_plot*(np.exp(-1.0587 + 0.8836*(np.log(np.exp(intercept_) * avg_diameter**coef_))+ 0.2840))
+
+    # finding the total biomass
+    TBM = (AGB + BGB)/1000
+
+    return TBM
+
+## 1.4 calculate the carbon sequestered
+def sequestered_carbon(plot_area,avg_diameter,trees_per_plot,intercept_,coef_):
+    
+    AGB = trees_per_plot*(np.exp(intercept_) * avg_diameter**coef_)
+
+    # Finding the BGB - Source (p.15): https://link.springer.com/content/pdf/10.1007%2F978-1-4020-6547-7_17.pdf
+    BGB = trees_per_plot*(np.exp(-1.0587 + 0.8836*(np.log(np.exp(intercept_) * avg_diameter**coef_))+ 0.2840))
+
+    # Finding the total biomass
+    TBM = (AGB + BGB)/1000
+
+    # Finding the carbon sequestered
+    sequestered_c = TBM*carbon_percentage
+
+    return sequestered_c
+
+## 1.5 calculating the number of trees per plot
+def trees_per_plot(num_trees_per_hectare, plot_area):
+    
+    tree_per_plot = num_trees_per_hectare * plot_area
+    
+    return tree_per_plot
+
+
+## 2. GRAPHING FUNCTIONS
+## 2.1 plotting the diameter vs biomass and the allometric equations calculated
+def dia_bm_plotter(df):
+    plt.scatter(df["dia"], df['bm'], color="magenta")
+    plt.plot(df['dia'], df["pred"], color="blue", label = "Calculated")
+    plt.plot(df['dia'], df["pred_lit"], color="chartreuse", label = "Litterature")
+    plt.plot(df['dia'], df["pred_opt"], color="cyan", label = "Optimized")
+    plt.ylabel("Biomass [kg]")
+    plt.xlabel("Diameter [cm]")
+    plt.legend(loc="upper left")
+    plt.title("Douglas tree growth with linear regressions")
+    plt.savefig('/Users/octave/Desktop/Forest_pic4.png', bbox_inches="tight")
+    plt.show()
+
+## 2.2 plotting the diameter vs biomass (log-transformed)
+def log_dia_bm_plotter(df):
+    plt.scatter(df["logdia"], df['logbm'], color="salmon")
+    plt.plot(df['logdia'],df["log_pred"], color="blue")
+    plt.ylabel("Log Biomass [kg]")
+    plt.xlabel("Log Diameter [cm]")
+    plt.show() 
+
+## 3. FINDING THE ALPHAs & BETAs PER SPECIES OF TREE TO CALCULATE THE ALLOMETRIC EQUATIONS
+
+# 3.1 BEERCH Tree
+
+# finding the biomass of the beerch with a 710 density factor
+# source: https://tropix.cirad.fr/FichiersComplementaires/FR/Temperees/HETRE.pdf
+df_beech = tree_csv_extractor('~/Desktop/Hetre/beerch.csv', 710)
+df_beech = linear_regression(df_beech, 'logdia', 'logbm',-2.013,2.434,-2.277,2.413)[0]
+
+dia_bm_plotter(df_beech)
+log_dia_bm_plotter(df_beech)
+
+# 3.2 OAK Tree
+# finding the biomass of the oak with a 740 density factor
+# source: https://tropix.cirad.fr/FichiersComplementaires/FR/Temperees/CHENE.pdf
+df_oak = tree_csv_extractor('~/Desktop/Hetre/oak.csv', 740)
+
+# data Cleaning (Removing error data)
+df_oak_clean = df_oak.loc[((df_oak["dia"] < 20) & (df_oak['bm'] < (-300 + 30*df_oak["dia"]))) | (df_oak["dia"] > 20)]
+df_oak_clean = linear_regression(df_oak_clean, 'logdia', 'logbm',-2.013,2.434,-1.639,2.240)[0]
+
+dia_bm_plotter(df_oak_clean)
+log_dia_bm_plotter(df_oak_clean)
+
+## 3.3 DOUGLAS Tree
+
+df_douglas = tree_csv_extractor('~/Desktop/Hetre/douglas.csv', 540)
+df_douglas = linear_regression(df_douglas, 'logdia', 'logbm', -2.2304, 2.4435, -2.246, 2.424)[0]
+
+dia_bm_plotter(df_douglas)
+log_dia_bm_plotter(df_douglas)
+
+## 3.4 EPICEA Tree
+
+df_epicea = tree_csv_extractor('~/Desktop/Hetre/epicea.csv', 450)
+
+# data Cleaning (Removing error data)
+df_epicea_clean = df_epicea.loc[((df_epicea["dia"] < 40) & (df_epicea['bm'] < (-300 + 30*df_epicea["dia"]))) | (df_epicea["dia"] > 40)]
+df_epicea_clean = linear_regression(df_epicea_clean, 'logdia', 'logbm', -2.0773, 2.3323, -2.205,2.330)[0]
+
+dia_bm_plotter(df_epicea_clean)
+log_dia_bm_plotter(df_epicea_clean)
+
+## 4. FINDING THE CARBON SEQUESTERED PER PLOT
+# reading the data on the property
+df_property = pd.read_csv('~/Desktop/Hetre/Parcellaires/Property data.csv')
+
+## defining the fixed values for each plots
+# number of trees per ha (estimates)
+number_of_decidious_ha = 1000
+number_of_coniferus_ha = 1500
+
+# alpha and beta depending on species
+x_beech = linear_regression(df_beech, 'logdia', 'logbm',-2.013,2.434,-2.277,2.413)
+x_oak = linear_regression(df_oak_clean, 'logdia', 'logbm',-2.013,2.434,-1.639,2.240)
+x_epicea = linear_regression(df_epicea_clean, 'logdia', 'logbm', -2.0773, 2.3323, -2.205,2.330)
+x_douglas = linear_regression(df_douglas, 'logdia', 'logbm', -2.2304, 2.4435, -2.246, 2.424)
+
+## calculating the carbon sequestrated per specie of tree
+carbon_epicea_array = np.zeros(len(df_property))
+carbon_douglas_array = np.zeros(len(df_property))
+carbon_beech_array = np.zeros(len(df_property))
+carbon_oak_array = np.zeros(len(df_property))
+carbon_epindoug_array = np.zeros(len(df_property))
+
+for i in range(0, len(df_property)):
+    
+    # defining paramters
+    area_pp = df_property.iloc[i,3]
+    diameter_pp = df_property.iloc[i,4]
+    num_trees_pp = 0
+    
+    # finding the right number of tree per ha depending on coniferous or decidious
+    if(df_property.iloc[i,5] == 1):
+        num_trees_pp = number_of_coniferus_ha
+    elif(df_property.iloc[i,5] == 0):
+        num_trees_pp = number_of_decidious_ha
+        
+    num_trees_pp_array[i] = trees_per_plot(num_trees_pp, area_pp)
+    
+    if (df_property.iloc[i,2] == "Epicea"):
+        carbon_epicea_array[i] = sequestered_carbon(area_pp, diameter_pp, num_trees_pp_array[i], x_epicea[1],x_epicea[2])
+    elif (df_property.iloc[i,2] == "Beech"):
+        carbon_beech_array[i] = sequestered_carbon(area_pp, diameter_pp, num_trees_pp_array[i], x_beech[1],x_beech[2])
+    elif (df_property.iloc[i,2] == "Douglas"):
+        carbon_douglas_array[i] = sequestered_carbon(area_pp, diameter_pp, num_trees_pp_array[i], x_douglas[1],x_douglas[2])
+    elif (df_property.iloc[i,2] == "Oak"):
+        carbon_oak_array[i] = sequestered_carbon(area_pp, diameter_pp, num_trees_pp_array[i], x_oak[1],x_oak[2])
+    elif (df_property.iloc[i,2] == "Epicea & Douglas"):
+        carbon_epindoug_array[i] = (sequestered_carbon(area_pp, diameter_pp, num_trees_pp_array[i], x_epicea[1],x_epicea[2])+sequestered_carbon(area_pp, diameter_pp, num_trees_pp, x_douglas[1],x_douglas[2]))/2
+ 
+
+carbon_epicea = round(np.sum(carbon_epicea_array) + (1/2)*np.sum(carbon_epindoug_array))
+carbon_beech = round(np.sum(carbon_beech_array))
+carbon_douglas = round(np.sum(carbon_douglas_array) + (1/2)*np.sum(carbon_epindoug_array))
+carbon_oak = round(np.sum(carbon_oak_array))
+total_carbon_s = round(np.sum(carbon_epicea_array)+np.sum(carbon_beech_array)+np.sum(carbon_douglas_array)+np.sum(carbon_oak_array)+np.sum(carbon_epindoug_array))
+
+print(total_carbon_s)
+
+# plotting the results
+x4 = np.array([carbon_beech,carbon_oak,carbon_douglas,carbon_epicea])
+x5 = np.array(["European Beech", "Common Oak", "Douglas Fir", "Common Epicea"])
+
+c = ["lightcyan","cyan", "royalblue","blue"]
+plt.bar(x5, x4, color=c)
+plt.title("Total Carbon Sequestrated per Tree Specie")
+plt.ylabel("Carbon [kg]")
+plt.ylim((0,15000))
+plt.xlabel("Tree Specie", fontweight="bold")
+for index,data in enumerate(x4):
+    plt.text(x=index-0.18 , y =data+1000, s=f"{data}" , fontdict=dict(fontsize=10))
+plt.savefig('/Users/octave/Desktop/Forest_pic6.png', bbox_inches="tight")
+plt.plot()
